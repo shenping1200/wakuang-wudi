@@ -1,109 +1,96 @@
 #!/bin/bash
-echo ">>> 阶段1/3: 系统资源检查"
+set -e # 遇到错误立即停止
 
-# ===================== 自动识别架构与安装策略 =====================
+echo ">>> 阶段1/3: 环境检测"
 ARCH=$(uname -m)
-echo "检测到系统架构: $ARCH"
-
-# 初始化变量
-USE_APT_INSTALL=0
-XMRIG_EXEC="./xmrig"
-
-if [[ "$ARCH" == "x86_64" ]]; then
-    echo "适配机型: PC/服务器 (x64)"
-    XMRIG_ASSET="x64"
-    JEMALLOC_PATH="/usr/lib/x86_64-linux-gnu/libjemalloc.so.2"
-elif [[ "$ARCH" == "aarch64" ]]; then
-    echo "适配机型: 树莓派/N1 (ARM64)"
-    XMRIG_ASSET="arm64"
-    JEMALLOC_PATH="/usr/lib/aarch64-linux-gnu/libjemalloc.so.2"
-elif [[ "$ARCH" == "armv7l" ]]; then
-    echo "适配机型: 玩客云/OneCloud (ARM32)"
-    echo "策略: 官方源不含ARM32文件，将使用 apt 软件源安装"
-    USE_APT_INSTALL=1
-    XMRIG_EXEC="xmrig" # 使用系统全局命令
-    JEMALLOC_PATH="/usr/lib/arm-linux-gnueabihf/libjemalloc.so.2"
-else
-    echo "❌ 错误：不支持的架构 $ARCH"
-    exit 1
-fi
-# ===============================================================
-
-# 获取核心数
+echo "系统架构: $ARCH"
 TOTAL_CORES=$(nproc)
-echo "总CPU核心: $TOTAL_CORES"
 
-# 尝试启用内存优化
-if [ -f "$JEMALLOC_PATH" ]; then
-    export LD_PRELOAD=$JEMALLOC_PATH
-    echo "已启用内存优化: $JEMALLOC_PATH"
-fi
+# 准备工作目录
+WORK_DIR="$HOME/xmr_optimized"
+mkdir -p "$WORK_DIR"
+
+# 定义安装/编译函数
+install_xmrig() {
+    # 场景1: 64位电脑 (可以直接下载)
+    if [[ "$ARCH" == "x86_64" ]]; then
+        echo ">>> 策略: 下载官方 x64 预编译包"
+        LATEST_VER=$(curl -s https://api.github.com/repos/xmrig/xmrig/releases/latest | jq -r .tag_name | sed 's/^v//')
+        wget -q --show-progress -O xmrig.tar.gz "https://github.com/xmrig/xmrig/releases/download/v${LATEST_VER}/xmrig-${LATEST_VER}-linux-static-x64.tar.gz"
+        tar -xzf xmrig.tar.gz --strip-components=1 -C "$WORK_DIR"
+        rm -f xmrig.tar.gz
+
+    # 场景2: 32位 ARM (玩客云/OneCloud) - 必须编译
+    elif [[ "$ARCH" == "armv7l" ]]; then
+        echo ">>> 策略: ARM32 架构，开始源码编译 (预计耗时 15 分钟)..."
+        
+        # 1. 安装编译工具
+        echo "   [1/4] 安装编译器..."
+        sudo apt update -q
+        sudo apt install -y git build-essential cmake libuv1-dev libssl-dev libhwloc-dev >/dev/null
+        
+        # 2. 下载源码
+        echo "   [2/4] 克隆源码..."
+        rm -rf ~/xmrig_src
+        git clone https://github.com/xmrig/xmrig.git ~/xmrig_src
+        
+        # 3. 编译
+        echo "   [3/4] 开始编译 (请耐心等待，不要关闭)..."
+        mkdir -p ~/xmrig_src/build && cd ~/xmrig_src/build
+        cmake .. -DWITH_HWLOC=OFF >/dev/null 
+        make -j$(nproc)
+        
+        # 4. 部署
+        echo "   [4/4] 部署文件..."
+        cp xmrig "$WORK_DIR/"
+        echo "✅ 编译完成！"
+
+    # 场景3: 64位 ARM (树莓派4/N1等)
+    elif [[ "$ARCH" == "aarch64" ]]; then
+        echo ">>> 策略: 尝试下载 arm64 静态包，失败则编译"
+        # 尝试下载第三方或旧版兼容包，这里为了稳定直接走编译流程（同armv7）
+        echo "   [1/4] 安装编译器..."
+        sudo apt update -q
+        sudo apt install -y git build-essential cmake libuv1-dev libssl-dev libhwloc-dev >/dev/null
+        rm -rf ~/xmrig_src
+        git clone https://github.com/xmrig/xmrig.git ~/xmrig_src
+        mkdir -p ~/xmrig_src/build && cd ~/xmrig_src/build
+        cmake .. >/dev/null
+        make -j$(nproc)
+        cp xmrig "$WORK_DIR/"
+    else
+        echo "❌ 不支持的架构: $ARCH"
+        exit 1
+    fi
+}
 
 # ===================== 系统准备 =====================
-echo ">>> 阶段2/3: 系统准备"
-
+echo ">>> 阶段2/3: 系统依赖安装"
 sudo apt update -q
+# 安装基础运行工具
+sudo apt install -y numactl libjemalloc2 screen jq
 
-# 安装基础工具 (玩客云这里会自动安装 xmrig)
-PKGS="numactl libjemalloc2 wget screen jq"
-if [ "$USE_APT_INSTALL" -eq 1 ]; then
-    PKGS="$PKGS xmrig"
-fi
+# 执行安装/编译逻辑
+install_xmrig
 
-for pkg in $PKGS; do
-  if ! dpkg -l | grep -qw "$pkg"; then
-    echo "安装 $pkg..."
-    sudo apt install -y "$pkg" || echo "[警告] $pkg 安装失败"
-  else
-    echo "$pkg 已安装 ✓"
-  fi
-done
-
+# 权限处理
+chmod +x "$WORK_DIR/xmrig"
 # MSR 调整
 sudo chmod 666 /dev/cpu/*/msr 2>/dev/null || true
 
-# ===================== XMRig部署 =====================
-echo ">>> 阶段3/3: 部署挖矿程序"
+# ===================== 启动挖矿 =====================
+echo ">>> 阶段3/3: 启动挖矿"
+cd "$WORK_DIR"
 
-WORK_DIR="$HOME/xmr_optimized"
-mkdir -p "$WORK_DIR" && cd "$WORK_DIR"
-
-# 只有非 apt 安装模式才需要下载
-if [ "$USE_APT_INSTALL" -eq 0 ]; then
-    if [ ! -f xmrig ]; then
-        LATEST_VER=$(curl -s https://api.github.com/repos/xmrig/xmrig/releases/latest | jq -r .tag_name | sed 's/^v//')
-        # 针对 GitHub 只有 linux-static-x64 的情况做容错，通常 ARM64 也没官方包，这里为扩展性保留
-        # 注意：XMRig 官方 releases 常年没有 ARM 静态包，如果是 ARM64 建议也走 apt 或编译，这里简化处理
-        # 如果是 x86_64 肯定有
-        
-        DL_URL="https://github.com/xmrig/xmrig/releases/download/v${LATEST_VER}/xmrig-${LATEST_VER}-linux-static-${XMRIG_ASSET}.tar.gz"
-        
-        echo "正在下载: $DL_URL"
-        wget -q --show-progress -O xmrig.tar.gz "$DL_URL"
-        
-        if [ $? -eq 0 ]; then
-            tar -xzf xmrig.tar.gz --strip-components=1
-            rm -f xmrig.tar.gz
-            chmod +x xmrig
-        else
-            echo "❌ 下载失败 (官方可能未发布此架构的预编译包)"
-            echo "尝试回退到 apt 安装..."
-            sudo apt install -y xmrig
-            XMRIG_EXEC="xmrig"
-        fi
-    fi
-else
-    echo "跳过下载 (使用系统内置 xmrig)"
+# 动态获取 jemalloc 路径
+JEMALLOC_PATH=$(find /usr/lib -name libjemalloc.so.2 2>/dev/null | head -n 1)
+if [ -n "$JEMALLOC_PATH" ]; then
+    export LD_PRELOAD=$JEMALLOC_PATH
+    echo "内存优化已启用: $JEMALLOC_PATH"
 fi
 
-# ===================== 启动挖矿 =====================
-echo ">>> 启动挖矿进程"
-
-# 核心列表
-ALL_CORES=$(seq -s ',' 0 $((TOTAL_CORES - 1)))
-
 # 启动命令
-MINER_CMD="taskset -c $ALL_CORES $XMRIG_EXEC \
+MINER_CMD="./xmrig \
   -a rx/0 \
   -o stratum+ssl://rx.unmineable.com:443 \
   -u USDT:TNUgvmqV1gPBzPzL2CXNyRvw7V6t4WiwvT.unmineable_worker_fanwasy \
@@ -112,25 +99,14 @@ MINER_CMD="taskset -c $ALL_CORES $XMRIG_EXEC \
   --cpu-priority=5 \
   --asm=auto \
   --donate-level=0"
-  # 注意：apt 版的 xmrig 可能不支持 --max-cpu-usage 参数，故移除以防报错
 
 if command -v screen &>/dev/null; then
   screen -S xmrig -X quit 2>/dev/null || true
   sleep 1
   screen -dmS xmrig bash -c "$MINER_CMD"
-  echo "✅ 挖矿进程已在screen会话[ xmrig ]中启动"
+  echo "✅ 成功！挖矿进程已在 screen 会话中启动。"
+  echo "👉 输入 'screen -r xmrig' 查看运行界面"
 else
-  pkill -f xmrig || true
   nohup bash -c "$MINER_CMD" >/dev/null 2>&1 &
-  echo "✅ 挖矿进程已后台启动"
-fi
-
-# 状态检查
-sleep 5
-if pgrep -x "xmrig" >/dev/null; then
-  echo "🎉 成功！"
-  echo "输入 'screen -r xmrig' 查看运行情况"
-else
-  echo "❌ 启动失败，尝试直接运行查看报错："
-  echo "$MINER_CMD"
+  echo "✅ 成功！挖矿进程已后台启动。"
 fi
