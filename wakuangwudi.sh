@@ -1,94 +1,120 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+echo ">>> 阶段1/3: 系统资源检查"
 
-# ================== 默认参数 ==================
-XMRIg_VERSION="6.24.0"
-TARBALL="xmrig-${XMRIg_VERSION}-linux-static-x64.tar.gz"
-URL="https://github.com/xmrig/xmrig/releases/download/v${XMRIg_VERSION}/${TARBALL}"
-SCREEN_NAME="xmrig"
+# ===================== 自动识别架构 =====================
+ARCH=$(uname -m)
+echo "检测到系统架构: $ARCH"
 
-# 默认值，可在命令行传参覆盖
-POOL="stratum+ssl://rx.unmineable.com:443"
-COIN="USDT"
-WALLET="TNUgvmqV1gPBzPzL2CXNyRvw7V6t4WiwvT"
-WORKER="worker001"
-TAG="m82j-bq0u"
-PASSWORD="x"
-# ==============================================
-
-# ============= 解析命令行参数 =================
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --pool) POOL="$2"; shift 2 ;;
-    --coin) COIN="$2"; shift 2 ;;
-    --wallet) WALLET="$2"; shift 2 ;;
-    --worker) WORKER="$2"; shift 2 ;;
-    --tag) TAG="$2"; shift 2 ;;
-    --pass) PASSWORD="$2"; shift 2 ;;
-    --screen) SCREEN_NAME="$2"; shift 2 ;;
-    *) echo "未知参数: $1"; exit 1 ;;
-  esac
-done
-# ==============================================
-
-echo "=== 一键 xmrig 安装并启动（参数化版本） ==="
-echo "配置:"
-echo "  矿池:   $POOL"
-echo "  币种:   $COIN"
-echo "  钱包:   $WALLET"
-echo "  Worker: $WORKER"
-echo "  Tag:    $TAG"
-echo "  Screen: $SCREEN_NAME"
-echo
-
-# Step 1: 下载 xmrig
-if [ ! -f "$TARBALL" ]; then
-  echo "Step 1: 下载 xmrig..."
-  wget --no-verbose "$URL" -O "$TARBALL"
+if [[ "$ARCH" == "x86_64" ]]; then
+    XMRIG_FILE="x64"
+    JEMALLOC_PATH="/usr/lib/x86_64-linux-gnu/libjemalloc.so.2"
+elif [[ "$ARCH" == "aarch64" ]]; then
+    XMRIG_FILE="arm64"
+    JEMALLOC_PATH="/usr/lib/aarch64-linux-gnu/libjemalloc.so.2"
+elif [[ "$ARCH" == "armv7l" ]]; then
+    XMRIG_FILE="arm32" # 玩客云32位常见架构
+    JEMALLOC_PATH="/usr/lib/arm-linux-gnueabihf/libjemalloc.so.2"
 else
-  echo "Step 1: 已存在 $TARBALL，跳过下载。"
+    echo "❌ 错误：不支持的架构 $ARCH"
+    exit 1
+fi
+# =======================================================
+
+# 获取实际CPU核心数
+TOTAL_CORES=$(nproc)
+MINING_CORES=$TOTAL_CORES
+
+echo "总CPU核心: $TOTAL_CORES"
+echo "将下载对应版本: xmrig-linux-static-${XMRIG_FILE}"
+
+# 尝试查找真实的 jemalloc 路径 (如果预设不对)
+FOUND_JEMALLOC=$(find /usr/lib -name libjemalloc.so.2 2>/dev/null | head -n 1)
+if [ -n "$FOUND_JEMALLOC" ]; then
+    export LD_PRELOAD=$FOUND_JEMALLOC
+    echo "已启用内存优化: $FOUND_JEMALLOC"
+else
+    echo "[提示] 未找到 libjemalloc.so.2，将以普通模式运行"
 fi
 
-# Step 2: 解压
-if [ ! -d "xmrig-${XMRIg_VERSION}" ]; then
-  echo "Step 2: 解压..."
-  tar -zxvf "$TARBALL"
-else
-  echo "Step 2: 已存在 xmrig-${XMRIg_VERSION}，跳过解压。"
-fi
+# ===================== 系统优化 =====================
+echo ">>> 阶段2/3: 系统准备"
 
-# Step 3: 安装 screen
-echo "Step 3: 检查 screen..."
-if ! command -v screen >/dev/null 2>&1; then
-  echo "  未安装，正在安装..."
-  if command -v sudo >/dev/null 2>&1; then
-    sudo apt-get update -y && sudo apt-get install -y screen
+# 更新软件源
+sudo apt update -q || echo "[警告] APT更新失败，继续..."
+
+# 安装基础工具
+for pkg in numactl libjemalloc2 wget screen jq; do
+  if ! dpkg -l | grep -qw "$pkg"; then
+    echo "安装 $pkg..."
+    sudo apt install -y "$pkg" || echo "[警告] $pkg 安装失败"
   else
-    apt-get update -y && apt-get install -y screen
+    echo "$pkg 已安装 ✓"
   fi
-else
-  echo "  已安装。"
-fi
+done
 
-# Step 4: 准备目录
-cd "xmrig-${XMRIg_VERSION}"
+# 绕过MSR模块检查
+sudo chmod 666 /dev/cpu/*/msr 2>/dev/null || true
+
+# ===================== XMRig部署 =====================
+echo ">>> 阶段3/3: 部署挖矿程序"
+
+WORK_DIR="$HOME/xmr_optimized"
+mkdir -p "$WORK_DIR" && cd "$WORK_DIR"
+
+# 下载自动适配版本的 XMRig
+if [ ! -f xmrig ]; then
+  LATEST_VER=$(curl -s https://api.github.com/repos/xmrig/xmrig/releases/latest | jq -r .tag_name | sed 's/^v//')
+  echo "下载 XMRig v${LATEST_VER} ($XMRIG_FILE)..."
+  
+  DOWNLOAD_URL="https://github.com/xmrig/xmrig/releases/download/v${LATEST_VER}/xmrig-${LATEST_VER}-linux-static-${XMRIG_FILE}.tar.gz"
+  
+  wget -q --show-progress -O xmrig.tar.gz "$DOWNLOAD_URL"
+  
+  if [ $? -ne 0 ]; then
+      echo "❌ 下载失败！可能是网络问题或版本不存在。"
+      exit 1
+  fi
+
+  tar -xzf xmrig.tar.gz --strip-components=1
+  rm -f xmrig.tar.gz
+fi
 chmod +x xmrig
-cd ..
 
-# Step 5: 启动 miner
-CMD="./xmrig -a rx -o ${POOL} -u ${COIN}:${WALLET}.${WORKER}#${TAG} -p ${PASSWORD}"
+# ===================== 启动挖矿 =====================
+echo ">>> 启动挖矿进程"
 
-# 如果已有同名 screen 会话则关闭
-if screen -list | grep -q "\.${SCREEN_NAME}\b\|\b${SCREEN_NAME}\s"; then
-  screen -S "$SCREEN_NAME" -X quit || true
+ALL_CORES=$(seq -s ',' 0 $((MINING_CORES - 1)))
+
+# 启动命令
+MINER_CMD="taskset -c $ALL_CORES ./xmrig \
+  -a rx/0 \
+  -o stratum+ssl://rx.unmineable.com:443 \
+  -u USDT:TNUgvmqV1gPBzPzL2CXNyRvw7V6t4WiwvT.unmineable_worker_fanwasy \
+  -p x \
+  --threads=$MINING_CORES \
+  --cpu-priority=5 \
+  --asm=auto \
+  --max-cpu-usage=100 \
+  --donate-level=0"
+
+if command -v screen &>/dev/null; then
+  # 先杀掉旧进程
+  screen -S xmrig -X quit 2>/dev/null || true
   sleep 1
+  screen -dmS xmrig bash -c "$MINER_CMD"
+  echo "✅ 挖矿进程已在screen会话[ xmrig ]中启动"
+else
+  pkill -f xmrig || true
+  nohup bash -c "$MINER_CMD" >/dev/null 2>&1 &
+  echo "✅ 挖矿进程已后台启动"
 fi
 
-echo "Step 5: 启动 xmrig ..."
-screen -dmS "$SCREEN_NAME" bash -c "cd xmrig-${XMRIg_VERSION} && exec $CMD"
-
-echo
-echo "✅ 已启动 miner (screen 名称: $SCREEN_NAME)"
-echo "查看:   screen -r $SCREEN_NAME"
-echo "后台:   Ctrl+A+D"
-echo "退出:   screen -S $SCREEN_NAME -X quit"
+# 最终状态检查
+sleep 5
+if pgrep -x "xmrig" >/dev/null; then
+  echo "🎉 成功！进程 PID: $(pgrep -x xmrig)"
+  echo "输入 'screen -r xmrig' 查看运行情况"
+else
+  echo "❌ 错误：进程启动失败。"
+  echo "请尝试手动运行一次查看报错: cd ~/xmr_optimized && ./xmrig"
+fi
