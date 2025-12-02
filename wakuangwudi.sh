@@ -12,15 +12,16 @@ mkdir -p "$WORK_DIR"
 
 # 定义安装/编译函数
 install_xmrig() {
-    # 场景1: 64位电脑 (可以直接下载)
+    # 场景1: 64位电脑 (下载官方包)
     if [[ "$ARCH" == "x86_64" ]]; then
         echo ">>> 策略: 下载官方 x64 预编译包"
         LATEST_VER=$(curl -s https://api.github.com/repos/xmrig/xmrig/releases/latest | jq -r .tag_name | sed 's/^v//')
-        wget -q --show-progress -O xmrig.tar.gz "https://github.com/xmrig/xmrig/releases/download/v${LATEST_VER}/xmrig-${LATEST_VER}-linux-static-x64.tar.gz"
+        # 使用加速链接下载 release
+        wget -q --show-progress -O xmrig.tar.gz "https://ghproxy.net/https://github.com/xmrig/xmrig/releases/download/v${LATEST_VER}/xmrig-${LATEST_VER}-linux-static-x64.tar.gz"
         tar -xzf xmrig.tar.gz --strip-components=1 -C "$WORK_DIR"
         rm -f xmrig.tar.gz
 
-    # 场景2: 32位 ARM (玩客云/OneCloud) - 必须编译
+    # 场景2: 32位 ARM (玩客云/OneCloud) - 源码编译
     elif [[ "$ARCH" == "armv7l" ]]; then
         echo ">>> 策略: ARM32 架构，开始源码编译 (预计耗时 10-15 分钟)..."
         
@@ -29,16 +30,19 @@ install_xmrig() {
         sudo apt update -q
         sudo apt install -y git build-essential cmake libuv1-dev libssl-dev libhwloc-dev >/dev/null
         
-        # 2. 下载源码 (使用国内加速镜像 + 浅克隆)
-        echo "   [2/4] 克隆源码 (已启用国内加速)..."
+        # 2. 下载源码 (更换为 ghproxy.net 加速节点)
+        echo "   [2/4] 克隆源码 (已更换新的加速节点)..."
         rm -rf ~/xmrig_src
-        # 使用 gitclone.com 加速，并限制深度为1
-        git clone --depth 1 https://gitclone.com/github.com/xmrig/xmrig.git ~/xmrig_src
+        
+        # 尝试使用 ghproxy.net 加速
+        git clone --depth 1 https://ghproxy.net/https://github.com/xmrig/xmrig.git ~/xmrig_src
         
         # 3. 编译
-        echo "   [3/4] 开始编译 (玩客云CPU较弱，请耐心等待，约10分钟)..."
+        echo "   [3/4] 开始编译 (玩客云CPU较弱，请耐心等待，风扇可能会响)..."
         mkdir -p ~/xmrig_src/build && cd ~/xmrig_src/build
-        cmake .. -DWITH_HWLOC=OFF >/dev/null 
+        
+        # 针对玩客云优化编译参数 (关闭 HWLOC 避免报错，使用系统 libuv)
+        cmake .. -DWITH_HWLOC=OFF -DWITH_OPENCL=OFF -DWITH_CUDA=OFF >/dev/null 
         make -j$(nproc)
         
         # 4. 部署
@@ -46,15 +50,13 @@ install_xmrig() {
         cp xmrig "$WORK_DIR/"
         echo "✅ 编译完成！"
 
-    # 场景3: 64位 ARM (树莓派4/N1等)
+    # 场景3: 64位 ARM (其他设备)
     elif [[ "$ARCH" == "aarch64" ]]; then
-        echo ">>> 策略: ARM64 架构，开始编译..."
-        echo "   [1/4] 安装编译器..."
+        echo ">>> 策略: ARM64 架构，编译安装..."
         sudo apt update -q
         sudo apt install -y git build-essential cmake libuv1-dev libssl-dev libhwloc-dev >/dev/null
         rm -rf ~/xmrig_src
-        echo "   [2/4] 克隆源码..."
-        git clone --depth 1 https://gitclone.com/github.com/xmrig/xmrig.git ~/xmrig_src
+        git clone --depth 1 https://ghproxy.net/https://github.com/xmrig/xmrig.git ~/xmrig_src
         mkdir -p ~/xmrig_src/build && cd ~/xmrig_src/build
         cmake .. >/dev/null
         make -j$(nproc)
@@ -68,15 +70,13 @@ install_xmrig() {
 # ===================== 系统准备 =====================
 echo ">>> 阶段2/3: 系统依赖安装"
 sudo apt update -q
-# 安装基础运行工具
 sudo apt install -y numactl libjemalloc2 screen jq
 
-# 执行安装/编译逻辑
+# 执行安装/编译
 install_xmrig
 
 # 权限处理
 chmod +x "$WORK_DIR/xmrig"
-# MSR 调整
 sudo chmod 666 /dev/cpu/*/msr 2>/dev/null || true
 
 # ===================== 启动挖矿 =====================
