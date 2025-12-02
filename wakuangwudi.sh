@@ -12,11 +12,10 @@ mkdir -p "$WORK_DIR"
 
 # 定义安装/编译函数
 install_xmrig() {
-    # 场景1: 64位电脑 (尝试走局域网代理下载)
+    # 场景1: 64位电脑 (下载官方包)
     if [[ "$ARCH" == "x86_64" ]]; then
         echo ">>> 策略: 下载官方 x64 预编译包"
         LATEST_VER=$(curl -s https://api.github.com/repos/xmrig/xmrig/releases/latest | jq -r .tag_name | sed 's/^v//')
-        
         # 使用局域网代理下载
         wget -e use_proxy=yes -e http_proxy=192.168.1.116:10809 -e https_proxy=192.168.1.116:10809 \
              --no-check-certificate \
@@ -27,25 +26,38 @@ install_xmrig() {
 
     # 场景2: 32位 ARM (玩客云/OneCloud) - 源码编译
     elif [[ "$ARCH" == "armv7l" ]]; then
-        echo ">>> 策略: ARM32 架构，开始源码编译 (预计耗时 10-15 分钟)..."
+        echo ">>> 策略: ARM32 架构，开始源码编译 (预计耗时 15 分钟)..."
         
-        # 1. 安装编译工具
+        # 1. 安装编译工具 (增加 unzip)
         echo "   [1/4] 安装编译器..."
         sudo apt update -q
-        sudo apt install -y git build-essential cmake libuv1-dev libssl-dev libhwloc-dev >/dev/null
+        sudo apt install -y build-essential cmake libuv1-dev libssl-dev libhwloc-dev unzip jq >/dev/null
         
-        # 2. 下载源码 (使用局域网代理 192.168.1.116:10809)
-        echo "   [2/4] 克隆源码 (使用局域网代理 192.168.1.116:10809)..."
-        rm -rf ~/xmrig_src
+        # 2. 下载源码 ZIP 包 (关键修改：用 wget 替代 git，走局域网代理)
+        echo "   [2/4] 下载源码压缩包..."
+        rm -rf ~/xmrig-src-zip
         
-        # 关键命令：指定 Git 使用局域网 HTTP 代理，并忽略 SSL 验证
-        git clone -c http.proxy="http://192.168.1.116:10809" -c http.sslVerify=false --depth 1 https://github.com/xmrig/xmrig.git ~/xmrig_src
+        LATEST_VER=$(curl -s -x 192.168.1.116:10809 https://api.github.com/repos/xmrig/xmrig/releases/latest | jq -r .tag_name)
+        # 如果获取版本失败，默认使用 v6.21.0
+        if [ -z "$LATEST_VER" ] || [ "$LATEST_VER" == "null" ]; then LATEST_VER="v6.21.0"; fi
+        
+        echo "        版本: $LATEST_VER"
+        
+        # 下载 ZIP 源码
+        wget -e use_proxy=yes -e http_proxy=192.168.1.116:10809 -e https_proxy=192.168.1.116:10809 \
+             --no-check-certificate \
+             -O xmrig-src.zip \
+             "https://github.com/xmrig/xmrig/archive/refs/tags/${LATEST_VER}.zip"
+
+        # 解压
+        unzip -q xmrig-src.zip
+        mv xmrig-* ~/xmrig_src
+        rm xmrig-src.zip
         
         # 3. 编译
-        echo "   [3/4] 开始编译 (玩客云CPU较弱，请耐心等待，风扇可能会响)..."
+        echo "   [3/4] 开始编译 (玩客云CPU较弱，请耐心等待)..."
         mkdir -p ~/xmrig_src/build && cd ~/xmrig_src/build
         
-        # 针对玩客云优化编译参数
         cmake .. -DWITH_HWLOC=OFF -DWITH_OPENCL=OFF -DWITH_CUDA=OFF >/dev/null 
         make -j$(nproc)
         
@@ -54,18 +66,6 @@ install_xmrig() {
         cp xmrig "$WORK_DIR/"
         echo "✅ 编译完成！"
 
-    # 场景3: 64位 ARM (其他设备)
-    elif [[ "$ARCH" == "aarch64" ]]; then
-        echo ">>> 策略: ARM64 架构，编译安装..."
-        sudo apt update -q
-        sudo apt install -y git build-essential cmake libuv1-dev libssl-dev libhwloc-dev >/dev/null
-        rm -rf ~/xmrig_src
-        # 同样使用局域网代理
-        git clone -c http.proxy="http://192.168.1.116:10809" -c http.sslVerify=false --depth 1 https://github.com/xmrig/xmrig.git ~/xmrig_src
-        mkdir -p ~/xmrig_src/build && cd ~/xmrig_src/build
-        cmake .. >/dev/null
-        make -j$(nproc)
-        cp xmrig "$WORK_DIR/"
     else
         echo "❌ 不支持的架构: $ARCH"
         exit 1
