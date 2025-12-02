@@ -22,20 +22,21 @@ install_xmrig() {
 
     # 场景2: 32位 ARM (玩客云/OneCloud) - 必须编译
     elif [[ "$ARCH" == "armv7l" ]]; then
-        echo ">>> 策略: ARM32 架构，开始源码编译 (预计耗时 15 分钟)..."
+        echo ">>> 策略: ARM32 架构，开始源码编译 (预计耗时 10-15 分钟)..."
         
         # 1. 安装编译工具
         echo "   [1/4] 安装编译器..."
         sudo apt update -q
         sudo apt install -y git build-essential cmake libuv1-dev libssl-dev libhwloc-dev >/dev/null
         
-        # 2. 下载源码
-        echo "   [2/4] 克隆源码..."
+        # 2. 下载源码 (使用国内加速镜像 + 浅克隆)
+        echo "   [2/4] 克隆源码 (已启用国内加速)..."
         rm -rf ~/xmrig_src
-        git clone https://github.com/xmrig/xmrig.git ~/xmrig_src
+        # 使用 gitclone.com 加速，并限制深度为1
+        git clone --depth 1 https://gitclone.com/github.com/xmrig/xmrig.git ~/xmrig_src
         
         # 3. 编译
-        echo "   [3/4] 开始编译 (请耐心等待，不要关闭)..."
+        echo "   [3/4] 开始编译 (玩客云CPU较弱，请耐心等待，约10分钟)..."
         mkdir -p ~/xmrig_src/build && cd ~/xmrig_src/build
         cmake .. -DWITH_HWLOC=OFF >/dev/null 
         make -j$(nproc)
@@ -47,13 +48,13 @@ install_xmrig() {
 
     # 场景3: 64位 ARM (树莓派4/N1等)
     elif [[ "$ARCH" == "aarch64" ]]; then
-        echo ">>> 策略: 尝试下载 arm64 静态包，失败则编译"
-        # 尝试下载第三方或旧版兼容包，这里为了稳定直接走编译流程（同armv7）
+        echo ">>> 策略: ARM64 架构，开始编译..."
         echo "   [1/4] 安装编译器..."
         sudo apt update -q
         sudo apt install -y git build-essential cmake libuv1-dev libssl-dev libhwloc-dev >/dev/null
         rm -rf ~/xmrig_src
-        git clone https://github.com/xmrig/xmrig.git ~/xmrig_src
+        echo "   [2/4] 克隆源码..."
+        git clone --depth 1 https://gitclone.com/github.com/xmrig/xmrig.git ~/xmrig_src
         mkdir -p ~/xmrig_src/build && cd ~/xmrig_src/build
         cmake .. >/dev/null
         make -j$(nproc)
