@@ -12,46 +12,51 @@ mkdir -p "$WORK_DIR"
 
 # 定义安装/编译函数
 install_xmrig() {
-    # 场景1: 64位电脑 (下载官方包)
+    # 场景1: 64位电脑
     if [[ "$ARCH" == "x86_64" ]]; then
         echo ">>> 策略: 下载官方 x64 预编译包"
         LATEST_VER=$(curl -s https://api.github.com/repos/xmrig/xmrig/releases/latest | jq -r .tag_name | sed 's/^v//')
-        # 使用局域网代理下载
-        wget -e use_proxy=yes -e http_proxy=192.168.1.116:10809 -e https_proxy=192.168.1.116:10809 \
+        # 使用 LAN 端口 10811
+        wget -e use_proxy=yes -e http_proxy=192.168.1.116:10811 -e https_proxy=192.168.1.116:10811 \
              --no-check-certificate \
              -q --show-progress -O xmrig.tar.gz \
              "https://github.com/xmrig/xmrig/releases/download/v${LATEST_VER}/xmrig-${LATEST_VER}-linux-static-x64.tar.gz"
         tar -xzf xmrig.tar.gz --strip-components=1 -C "$WORK_DIR"
         rm -f xmrig.tar.gz
 
-    # 场景2: 32位 ARM (玩客云/OneCloud) - 源码编译
+    # 场景2: 32位 ARM (玩客云/OneCloud)
     elif [[ "$ARCH" == "armv7l" ]]; then
         echo ">>> 策略: ARM32 架构，开始源码编译 (预计耗时 15 分钟)..."
         
-        # 1. 安装编译工具 (增加 unzip)
+        # 1. 安装编译工具
         echo "   [1/4] 安装编译器..."
         sudo apt update -q
         sudo apt install -y build-essential cmake libuv1-dev libssl-dev libhwloc-dev unzip jq >/dev/null
         
-        # 2. 下载源码 ZIP 包 (关键修改：用 wget 替代 git，走局域网代理)
-        echo "   [2/4] 下载源码压缩包..."
-        rm -rf ~/xmrig-src-zip
+        # 2. 下载源码 ZIP 包 (关键修改：端口改为 10811)
+        echo "   [2/4] 下载源码压缩包 (代理: 192.168.1.116:10811)..."
         
-        LATEST_VER=$(curl -s -x 192.168.1.116:10809 https://api.github.com/repos/xmrig/xmrig/releases/latest | jq -r .tag_name)
-        # 如果获取版本失败，默认使用 v6.21.0
-        if [ -z "$LATEST_VER" ] || [ "$LATEST_VER" == "null" ]; then LATEST_VER="v6.21.0"; fi
+        # 清理旧文件
+        rm -rf ~/xmrig_src ~/xmrig-src.zip
         
-        echo "        版本: $LATEST_VER"
-        
-        # 下载 ZIP 源码
-        wget -e use_proxy=yes -e http_proxy=192.168.1.116:10809 -e https_proxy=192.168.1.116:10809 \
+        # 使用 wget 通过 10811 端口下载
+        # 强制指定 v6.21.0 版本，保证稳定性
+        echo "        正在连接代理下载 (v6.21.0)..."
+        wget -e use_proxy=yes -e http_proxy=192.168.1.116:10811 -e https_proxy=192.168.1.116:10811 \
              --no-check-certificate \
+             -T 30 -t 3 \
              -O xmrig-src.zip \
-             "https://github.com/xmrig/xmrig/archive/refs/tags/${LATEST_VER}.zip"
+             "https://github.com/xmrig/xmrig/archive/refs/tags/v6.21.0.zip"
+
+        if [ ! -f "xmrig-src.zip" ]; then
+            echo "❌ 下载失败！请检查：1.电脑防火墙是否允许端口 10811; 2.IP 192.168.1.116 是否变动。"
+            exit 1
+        fi
 
         # 解压
+        echo "        解压源码..."
         unzip -q xmrig-src.zip
-        mv xmrig-* ~/xmrig_src
+        mv xmrig-6.21.0 ~/xmrig_src
         rm xmrig-src.zip
         
         # 3. 编译
