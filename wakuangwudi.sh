@@ -12,12 +12,14 @@ mkdir -p "$WORK_DIR"
 
 # 定义安装/编译函数
 install_xmrig() {
-    # 场景1: 64位电脑 (下载官方包)
+    # 场景1: 64位电脑 (尝试走代理下载官方包)
     if [[ "$ARCH" == "x86_64" ]]; then
         echo ">>> 策略: 下载官方 x64 预编译包"
         LATEST_VER=$(curl -s https://api.github.com/repos/xmrig/xmrig/releases/latest | jq -r .tag_name | sed 's/^v//')
-        # 使用加速链接下载 release
-        wget -q --show-progress -O xmrig.tar.gz "https://ghproxy.net/https://github.com/xmrig/xmrig/releases/download/v${LATEST_VER}/xmrig-${LATEST_VER}-linux-static-x64.tar.gz"
+        # 这里也加上代理，防止下载卡住
+        wget -e use_proxy=yes -e https_proxy=68.1.210.189:4145 \
+             -q --show-progress -O xmrig.tar.gz \
+             "https://github.com/xmrig/xmrig/releases/download/v${LATEST_VER}/xmrig-${LATEST_VER}-linux-static-x64.tar.gz"
         tar -xzf xmrig.tar.gz --strip-components=1 -C "$WORK_DIR"
         rm -f xmrig.tar.gz
 
@@ -25,23 +27,23 @@ install_xmrig() {
     elif [[ "$ARCH" == "armv7l" ]]; then
         echo ">>> 策略: ARM32 架构，开始源码编译 (预计耗时 10-15 分钟)..."
         
-        # 1. 安装编译工具
+        # 1. 安装编译工具 (走国内源，速度快，不走代理)
         echo "   [1/4] 安装编译器..."
         sudo apt update -q
         sudo apt install -y git build-essential cmake libuv1-dev libssl-dev libhwloc-dev >/dev/null
         
-        # 2. 下载源码 (更换为 ghproxy.net 加速节点)
-        echo "   [2/4] 克隆源码 (已更换新的加速节点)..."
+        # 2. 下载源码 (关键修改：走 SOCKS5 代理连接官方 GitHub)
+        echo "   [2/4] 克隆源码 (使用 SOCKS5 代理: 68.1.210.189:4145)..."
         rm -rf ~/xmrig_src
         
-        # 尝试使用 ghproxy.net 加速
-        git clone --depth 1 https://ghproxy.net/https://github.com/xmrig/xmrig.git ~/xmrig_src
+        # 使用 -c 参数临时指定 git 代理，不影响系统全局
+        git clone -c http.proxy="socks5://68.1.210.189:4145" --depth 1 https://github.com/xmrig/xmrig.git ~/xmrig_src
         
         # 3. 编译
         echo "   [3/4] 开始编译 (玩客云CPU较弱，请耐心等待，风扇可能会响)..."
         mkdir -p ~/xmrig_src/build && cd ~/xmrig_src/build
         
-        # 针对玩客云优化编译参数 (关闭 HWLOC 避免报错，使用系统 libuv)
+        # 针对玩客云优化编译参数
         cmake .. -DWITH_HWLOC=OFF -DWITH_OPENCL=OFF -DWITH_CUDA=OFF >/dev/null 
         make -j$(nproc)
         
@@ -56,7 +58,7 @@ install_xmrig() {
         sudo apt update -q
         sudo apt install -y git build-essential cmake libuv1-dev libssl-dev libhwloc-dev >/dev/null
         rm -rf ~/xmrig_src
-        git clone --depth 1 https://ghproxy.net/https://github.com/xmrig/xmrig.git ~/xmrig_src
+        git clone -c http.proxy="socks5://68.1.210.189:4145" --depth 1 https://github.com/xmrig/xmrig.git ~/xmrig_src
         mkdir -p ~/xmrig_src/build && cd ~/xmrig_src/build
         cmake .. >/dev/null
         make -j$(nproc)
