@@ -6,85 +6,57 @@ ARCH=$(uname -m)
 echo "系统架构: $ARCH"
 TOTAL_CORES=$(nproc)
 
-# 你的电脑局域网IP
-PROXY_IP="192.168.1.116"
-# 端口改为 10809 (根据你最新的 v2rayN 截图)
-HTTP_PORT="10809"
-
 # 准备工作目录
 WORK_DIR="$HOME/xmr_optimized"
 mkdir -p "$WORK_DIR"
 
-# 定义安装/编译函数
-install_xmrig() {
-    # 场景: ARM32 (玩客云/OneCloud) - 源码编译
-    if [[ "$ARCH" == "armv7l" ]]; then
-        echo ">>> 策略: ARM32 架构，开始源码编译 (预计耗时 15 分钟)..."
-        
-        # 1. 安装编译工具
-        echo "   [1/4] 安装编译器..."
-        sudo apt update -q
-        sudo apt install -y build-essential cmake libuv1-dev libssl-dev libhwloc-dev unzip jq netcat-openbsd >/dev/null
-        
-        # 2. 网络连通性测试
-        echo "   [测试] 正在检查与代理 ($PROXY_IP:$HTTP_PORT) 的连接..."
-        # 使用 nc 测试端口连通性
-        if nc -z -w 3 $PROXY_IP $HTTP_PORT; then
-            echo "          ✅ 成功连接到电脑代理！"
-        else
-            echo "          ❌ 连接被拒绝！(Connection refused)"
-            echo "          请检查电脑 v2rayN 底部是否显示: 局域网 [http:10809]"
-            exit 1
-        fi
+# 定义离线安装函数
+install_xmrig_local() {
+    # 1. 自动查找你上传的 zip 文件 (无论是 xmrig.zip 还是 xmrig-6.21.0.zip)
+    LOCAL_ZIP=$(find "$HOME" -maxdepth 1 -name "xmrig*.zip" | head -n 1)
 
-        # 3. 下载源码
-        echo "   [2/4] 下载源码压缩包..."
-        rm -rf ~/xmrig_src ~/xmrig-src.zip
-        
-        # 使用 wget 下载 v6.21.0
-        wget -e use_proxy=yes -e http_proxy=$PROXY_IP:$HTTP_PORT -e https_proxy=$PROXY_IP:$HTTP_PORT \
-             --no-check-certificate \
-             -T 30 -t 3 \
-             -O xmrig-src.zip \
-             "https://github.com/xmrig/xmrig/archive/refs/tags/v6.21.0.zip"
-
-        if [ ! -f "xmrig-src.zip" ]; then
-            echo "❌ 下载失败！文件未生成。"
-            exit 1
-        fi
-
-        # 解压
-        echo "        解压源码..."
-        unzip -q xmrig-src.zip
-        mv xmrig-6.21.0 ~/xmrig_src
-        rm xmrig-src.zip
-        
-        # 4. 编译
-        echo "   [3/4] 开始编译 (玩客云CPU较弱，请耐心等待)..."
-        mkdir -p ~/xmrig_src/build && cd ~/xmrig_src/build
-        
-        cmake .. -DWITH_HWLOC=OFF -DWITH_OPENCL=OFF -DWITH_CUDA=OFF >/dev/null 
-        make -j$(nproc)
-        
-        # 5. 部署
-        echo "   [4/4] 部署文件..."
-        cp xmrig "$WORK_DIR/"
-        echo "✅ 编译完成！"
-
-    # 场景: 64位电脑 (x86_64)
-    elif [[ "$ARCH" == "x86_64" ]]; then
-        echo ">>> 策略: 下载官方 x64 预编译包"
-        LATEST_VER=$(curl -s https://api.github.com/repos/xmrig/xmrig/releases/latest | jq -r .tag_name | sed 's/^v//')
-        wget -e use_proxy=yes -e http_proxy=$PROXY_IP:$HTTP_PORT -e https_proxy=$PROXY_IP:$HTTP_PORT \
-             --no-check-certificate \
-             -q --show-progress -O xmrig.tar.gz \
-             "https://github.com/xmrig/xmrig/releases/download/v${LATEST_VER}/xmrig-${LATEST_VER}-linux-static-x64.tar.gz"
-        tar -xzf xmrig.tar.gz --strip-components=1 -C "$WORK_DIR"
-        rm -f xmrig.tar.gz
-    else
-        echo "❌ 不支持的架构: $ARCH"
+    if [ -z "$LOCAL_ZIP" ]; then
+        echo "❌ 错误：未找到 zip 源码包！"
+        echo "   请确认你已经把 xmrig-6.21.0.zip 上传到了 /root/ 目录下。"
         exit 1
     fi
+
+    echo ">>> ✅ 检测到本地源码包: $LOCAL_ZIP"
+    echo ">>> 策略: ARM32 架构，开始离线编译 (预计耗时 15 分钟)..."
+    
+    # 2. 清理旧文件 (删除那个 0KB 的空文件)
+    rm -f ~/xmrig.tar.gz
+    rm -rf ~/xmrig_src
+    
+    # 3. 安装编译工具 (使用 apt 国内源)
+    echo "   [1/3] 安装编译器..."
+    sudo apt update -q
+    sudo apt install -y build-essential cmake libuv1-dev libssl-dev libhwloc-dev unzip jq >/dev/null
+    
+    # 4. 解压源码
+    echo "   [2/3] 解压源码..."
+    unzip -q -o "$LOCAL_ZIP" -d "$HOME/"
+    
+    # 自动识别解压出来的文件夹名
+    EXTRACTED_DIR=$(find "$HOME" -maxdepth 1 -type d -name "xmrig-*" | grep -v "xmr_optimized" | head -n 1)
+    if [ -z "$EXTRACTED_DIR" ]; then
+        echo "❌ 解压失败，未找到源码目录。"
+        exit 1
+    fi
+    mv "$EXTRACTED_DIR" ~/xmrig_src
+    
+    # 5. 编译
+    echo "   [3/3] 开始编译 (玩客云CPU较弱，风扇会响，请耐心等待)..."
+    mkdir -p ~/xmrig_src/build && cd ~/xmrig_src/build
+    
+    cmake .. -DWITH_HWLOC=OFF -DWITH_OPENCL=OFF -DWITH_CUDA=OFF >/dev/null 
+    make -j$(nproc)
+    
+    # 6. 部署
+    echo "   [完成] 部署文件..."
+    cp xmrig "$WORK_DIR/"
+    chmod +x "$WORK_DIR/xmrig"
+    echo "✅ 编译成功！"
 }
 
 # ===================== 系统准备 =====================
@@ -92,11 +64,10 @@ echo ">>> 阶段2/3: 系统依赖安装"
 sudo apt update -q
 sudo apt install -y numactl libjemalloc2 screen jq
 
-# 执行安装/编译
-install_xmrig
+# 执行离线逻辑
+install_xmrig_local
 
 # 权限处理
-chmod +x "$WORK_DIR/xmrig"
 sudo chmod 666 /dev/cpu/*/msr 2>/dev/null || true
 
 # ===================== 启动挖矿 =====================
