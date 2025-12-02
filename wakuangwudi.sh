@@ -12,12 +12,13 @@ mkdir -p "$WORK_DIR"
 
 # 定义安装/编译函数
 install_xmrig() {
-    # 场景1: 64位电脑 (尝试走代理下载官方包)
+    # 场景1: 64位电脑 (尝试走局域网代理下载)
     if [[ "$ARCH" == "x86_64" ]]; then
         echo ">>> 策略: 下载官方 x64 预编译包"
         LATEST_VER=$(curl -s https://api.github.com/repos/xmrig/xmrig/releases/latest | jq -r .tag_name | sed 's/^v//')
-        # 使用新代理 + 忽略证书验证
-        wget -e use_proxy=yes -e http_proxy=84.239.49.38:9002 -e https_proxy=84.239.49.38:9002 \
+        
+        # 使用局域网代理下载
+        wget -e use_proxy=yes -e http_proxy=192.168.1.116:10809 -e https_proxy=192.168.1.116:10809 \
              --no-check-certificate \
              -q --show-progress -O xmrig.tar.gz \
              "https://github.com/xmrig/xmrig/releases/download/v${LATEST_VER}/xmrig-${LATEST_VER}-linux-static-x64.tar.gz"
@@ -31,15 +32,14 @@ install_xmrig() {
         # 1. 安装编译工具
         echo "   [1/4] 安装编译器..."
         sudo apt update -q
-        # 补充安装 ca-certificates 尝试修复证书问题，即使后面禁用了验证也装上比较好
-        sudo apt install -y git build-essential cmake libuv1-dev libssl-dev libhwloc-dev ca-certificates >/dev/null
+        sudo apt install -y git build-essential cmake libuv1-dev libssl-dev libhwloc-dev >/dev/null
         
-        # 2. 下载源码 (关键修改：新代理 + 禁用SSL验证)
-        echo "   [2/4] 克隆源码 (代理: 84.239.49.38:9002 | 已禁用SSL验证)..."
+        # 2. 下载源码 (使用局域网代理 192.168.1.116:10809)
+        echo "   [2/4] 克隆源码 (使用局域网代理 192.168.1.116:10809)..."
         rm -rf ~/xmrig_src
         
-        # 强制 Git 忽略 SSL 证书错误，直接拉取
-        git clone -c http.proxy="http://84.239.49.38:9002" -c http.sslVerify=false --depth 1 https://github.com/xmrig/xmrig.git ~/xmrig_src
+        # 关键命令：指定 Git 使用局域网 HTTP 代理，并忽略 SSL 验证
+        git clone -c http.proxy="http://192.168.1.116:10809" -c http.sslVerify=false --depth 1 https://github.com/xmrig/xmrig.git ~/xmrig_src
         
         # 3. 编译
         echo "   [3/4] 开始编译 (玩客云CPU较弱，请耐心等待，风扇可能会响)..."
@@ -60,8 +60,8 @@ install_xmrig() {
         sudo apt update -q
         sudo apt install -y git build-essential cmake libuv1-dev libssl-dev libhwloc-dev >/dev/null
         rm -rf ~/xmrig_src
-        # 同样使用新代理配置
-        git clone -c http.proxy="http://84.239.49.38:9002" -c http.sslVerify=false --depth 1 https://github.com/xmrig/xmrig.git ~/xmrig_src
+        # 同样使用局域网代理
+        git clone -c http.proxy="http://192.168.1.116:10809" -c http.sslVerify=false --depth 1 https://github.com/xmrig/xmrig.git ~/xmrig_src
         mkdir -p ~/xmrig_src/build && cd ~/xmrig_src/build
         cmake .. >/dev/null
         make -j$(nproc)
